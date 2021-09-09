@@ -1,0 +1,5 @@
+[style]
+based_on_style = pep8
+column_limit = 72
+split_penalty_excess_character = 1000
+

@@ -1,0 +1,14 @@
+Package: rprdcbl
+Title: Reproducible research report package
+Version: 0.0.1
+Authors@R: person("J. Tobias", "Hahn", email = "t@varkappa.dev",
+                  role = c("aut", "cre"))
+Description: Reproducible research report package.
+Depends: R (>= 4.0.0)
+URL: https://github.com/varkappadev/rprdcbl
+BugReports: https://github.com/varkappadev/rprdcbl/issues
+License: GPL-2
+LazyData: true
+Encoding: UTF-8
+RoxygenNote: 7.1.2
+Suggests: testthat, roxygen2, lintr, devtools, formatR

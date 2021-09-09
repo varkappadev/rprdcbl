@@ -1,0 +1,422 @@
+= Reproducible Research Reporting with `rprdcbl`
+J. Tobias Hahn <t@varkappa.dev>
+Version 0.0.1
+:toc: none
+:icons: font
+:doctype: book
+:source-highlighter: pygments
+:listing-caption: Listing
+:pdf-page-size: A4
+
+The `rprdcbl` library provides basic functionality for collecting and
+reporting on data about the current execution environment as may be
+helpful in the creation reproducible research artifacts.
+
+The source code is licensed under different licenses according to the
+language and community conventions:
+
+- The R package implementation is licensed under the
+  https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html[GNU General Public
+  License, Version 2
+  (https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)].
+- The Python implementation is licensed under the 
+  http://www.apache.org/licenses/LICENSE-2.0[Apache License Version 2.0 
+  (http://www.apache.org/licenses/LICENSE-2.0)].
+- This document and its source code: This work is licensed under a
+  http://creativecommons.org/licenses/by-sa/4.0/[Creative Commons
+  Attribution-ShareAlike 4.0 International License
+  (http://creativecommons.org/licenses/by-sa/4.0/)].
+
+== Introduction
+The library is intended to aid in the design and implementation of reproducible
+research by providing reporting and feedback mechanisms to be used by the
+researchers or, to a more limited degree, automatically by a broader software
+system.
+
+The initial design goals were:
+
+- a small library with few dependencies
+- minimal change to the existing workflow
+- no changes to project layout/structure, required version control software, etc.
+- limited failure points
+- default collection of core system information
+- ability to extend data collection
+
+This package is specifically *not* designed to:
+
+- be another report generation tool
+- track source code (use git, mercurial, etc.)
+- manage data artifacts (versioning, integrity checks, archiving, etc.)
+- manage dependencies, i.e. install particular versions -- this is in any case
+  not possible as some variants (under the same version in some cases) may have
+  been installed possibly with modifying patches or specific third-party linked
+  libraries (use a container or VM)
+- manage computational pipelines
+- provide caching of intermediate output for speed or verification
+
+The <<Alternatives>> section discusses packages that address some of
+these requirements.
+
+The intention is to have the same functionality available across
+typical programming languages used for data analytics and research in
+general. As a side effect of the multi-language nature of the project,
+there is an trade-off between the language-specific requirements,
+features, and conventions on the one hand, and consistency within the
+project on the other. Generally this is resolved here by implementing
+the same architecture but adopting language-specific naming conventions
+and data representation.
+
+This version is still in early development and there may be changes to
+the API. For this reason, this package will self-report, i.e. include
+itself in its output where applicable.
+
+== Concepts
+
+The implementation is built based on reporting boundaries. There are
+three types of boundaries:
+
+post-configuration (initial) boundary:: The initial boundary is
+typically defined after the script or runtime system has been loaded
+and configured. This should include loading of all libraries or
+packages required for execution, configuring input and output as well
+as parameters and hyper-parameters that may be needed. In particular
+the type and seed of the pseudo-random number generator should be fixed
+at this point.
+
+staged boundary:: There may be any number (including zero) of staged
+boundaries that define particular points of execution. They may align
+with the completion of significant steps in the processing chain.
+
+pre-exit (final) boundary:: This boundary is the last step before the
+program exits, i.e. no significant processing should occur past this
+boundary.
+
+Each time a boundary is hit, additional information is collected and
+some reporting may occur. The exit boundary provides the detailed
+reporting. Only the staged boundaries may be defined multiple times
+within a particular execution. The number of boundaries is itself a
+data point to be reported, i.e. defining boundaries is considered a
+change. In this sense, they are different from standard logging
+functionality.
+
+The final pre-exit boundary is a special case allowing for additional
+triggers and evaluation of the boundary sequence as well as the last
+opportunity for failure or reporting. This does not imply the need for
+the boundary to be the last evaluation within a program but rather the
+last substantive evaluation before any clean up is required. The
+distinction is not always clear and depends on the broader experimental
+setup and in particular output evaluation outside the program.
+
+== Coverage
+
+[width="100%",options="header"]
+|=======
+|Item|R|Python
+|Environment|`R` (fixed)|`Python` (fixed)
+|Variant|--|included, e.g. `cpython`
+|Version|included|included
+|Platform|as reported (`arch`)|as reported
+|Operating System| as reported | as reported
+|Packages|packages loaded (with version)| modules loaded (with version)*
+|LAPACK version| included | included (as per `scipy`)
+|PRNG| included for built-in* | included*
+|locale| from process environment | from process environment
+|Global Variables | names only | names of the module named `+++__main__+++` only, excluding modules
+|=======
+
+Typically all changes to the tracked items during the execution are considered
+issues, this does not apply to the items marked "*" where the following
+rules apply:
+
+- PRNG in R: all changes relative to the reference are considered violations,
+  only a change to the "kind", i.e. the first item of `.Random.seed` are
+  considered violations between boundaries. It also only applies to the PRNG
+  state in `.GlobalEnv`. Alternative PRNG implementations
+  (outside `stats`) are not tracked.
+- PRNG in Python: Similarly, only the builtin PRNG state of `random` is
+  tracked.
+  Inter-boundary changes are tracked but not tested for Python.
+- Python modules include all modules listed in `sys.modules` and versions as
+  reported by `+++__version__+++` if the module attribute is present. It does not
+  include other version information or version information on modules that are
+  not packages -- unless the version field is present by coincidence in such
+  (sub)modules.
+
+There are a number of configuration items that are *not covered* even though
+they probably should be:
+
+- BLAS implementation (vendor and version): there is no way to detect what
+  implementation and versions are loaded. R provides a way
+  (`extSoftVersion()`) to at least get the effective file name but there is no
+  reliable way to infer additional information from it that is stable across
+  runtime environments.
+- CPU model and microcode version: getting this information is possible with
+  additional dependencies but this package is intended to be as lightweight as
+  possible. Please refer to the section on extending reporting below if you
+  wish to include some of this information.
+
+These may help with debugging problems around reproducibility and
+contributions addressing these limitations are very welcome.
+
+== Implementation
+
+=== Core Functionality
+
+The library is loaded in Python using
+
+[source,python]
+----
+import rprdcbl
+----
+
+and in R using
+
+[source,r]
+----
+library(rprdcbl)
+----
+
+even though the latter may not actually be desirable. Instead qualified
+use of the individual functions may be preferred by some users.
+
+The typical use in Python is
+
+[source,python]
+----
+import rprdcbl
+# import ...
+
+# configure
+rprdcbl.pass_initial_boundary()
+# extract
+rprdcbl.pass_boundary()
+# transform
+rprdcbl.pass_boundary()
+# load
+rprdcbl.pass_final_boundary()
+# clean up
+----
+
+or equivalently in R
+
+[source,r]
+----
+library(rprdcbl)
+# library(...)
+# configure
+pass_initial_boundary()
+# extract
+pass_boundary()
+# transform
+pass_boundary()
+# load
+pass_final_boundary()
+# clean up
+----
+
+Either process uses a default configuration and indicates when a
+particular boundary has been reached. Additional options are available
+for certain types of boundaries. Note in particular that the initial
+and final boundaries can only be called once and any attempts to pass a
+staged boundary must occur before the final boundary and cannot occur
+before the initial boundary.
+
+=== Advanced Usage
+
+There are some, albeit limited, customization options available for the
+reporting functionality.
+
+*All boundaries* support the following arguments:
+
+`label` (string):: The name of the boundary. Each label must be a
+single line printable string.
+
+`quiet` (boolean):: Suppresses output. Defaults to true for all but the
+final boundary.
+
+The *initial* boundary also configures the general behavior:
+
+`output_mode` (string, one of `"pretty"`, `"parsable"`):: Defines the
+output formatting. `pretty` produces somewhat more human-readable
+output while `parsable` produces output for easier parsing.
+
+`lock_file` (string):: The name of the configuration lock file. This
+file stores collected information about the configuration. Unlike lock
+files in some development frameworks, it does *not* automatically
+enforce dependencies and configurations. The format is
+language-specific. If the file does not exist, the final boundary call
+will cause it to be created. This also implies that it will not be
+written to when data was loaded from it.
+
+`fail` (string, one of `"never"` (default), `"late"`, `"early"`)::
+Indicates if an error should be raised in the event of a reproducibility
+problem.
+
+=== Extending Existing Functionality
+
+Boundary functions are intended not to have any side effects outside
+this package, possible reproducibility errors (if so configured),
+and printed output.
+
+The *initial* boundary call accepts two additional parameters for
+extending the functionality:
+
+`custom_collect` (callable):: A function to be called at each boundary
+to collect additional information. It must return the data as a list or
+dictionary.
+
+`custom_test` (callable):: A function to be called to test if the
+collected data violates a particular custom rule. It needs to accept
+three values `(latest, previous, reference)`. The `latest` value is the
+one just observed using the function given by `custom_collect`,
+`previous` is the value in the previous boundary, and `reference` the
+value that was observed at the current boundary in the original run.
+The latter two values may not have a value (`None` or `NULL`). The test
+function must return the value of the message (or messages) explaining
+the reason for failure or the neutral value (`None` or `NULL`) if no
+error is detected.
+
+Since only a single function is supported, multiple tests must be
+included in the same function and a dictionary (named list) may be a
+suitable solution for storing such information.
+
+There are also two convenience functions for those requiring access to
+the internals:
+
+`get_state()`:: Returns the collected information. The format is not
+fixed yet. It may be useful to call this function and save its output
+in a script-global variable if a notebook is used. This allows for
+debugging and more detailed audits and may thus be a suitable
+alternative to the use of a lock file. However, the developer needs to
+ensure that the "original" (i.e. reference, baseline) variable is not
+replaced on subsequent runs.
+
+`is_failing()`:: Returns true if a reproduction error has been
+detected. This is of limited use since the code calling the function
+may not be reachable if early failing has been enabled and may not
+return true even for a failing run if late detection was configured. It
+is only useful if `failing` is disabled in the initial boundary and the
+function is called after the final boundary. It may return true earlier
+but this is not guaranteed behaviour. In short, the function, if
+reachable, may give false negatives before the final boundary.
+
+== Limitations and Alternatives
+
+=== Lock File
+
+The lock file contains the current boundary information for later use
+as the reference data. Ideally the format would be compatible across
+languages, human-readable, and provide a faithful representation of the
+original data on several platforms (if needed) but at the least for a
+save-load-cycle. Finally, the production of the file should not
+increase the dependencies of the package significantly. There is
+currently no such candidate. In particular human-readable formats such
+as the output produced by R's `dput` or `dump` produce output that is
+still different from the source data such as for floating-point numbers
+and some data types for which there is no built-in write support.
+
+Binary formats can solve this problem but this causes two other kinds
+of problems:
+
+1. The format may not be supported in later versions or is not easily
+   identifiable.
+2. In order to identify the packages and environment to read the file, 
+   one will need to be able to read the file.
+
+These problems are not specific to particular programming languages and
+their implementations but are inherent to the problem. Both R and
+Python authors make significant efforts towards backwards compatibility
+of the format but some uncertainty, especially for long-term storage
+remains.
+
+This current early version of the package uses the language-specific
+functions as discussed above. This does not resolve the circular
+dependency (the second problem) but gives a faithful representation on
+the same platform as long as there is backwards compatibility for these
+formats. If the circularity problem is a particular concern, it may be
+better to use `get_state()` and store the output in text form, possibly
+in addition to the lock file.
+
+=== Parallel Distributed Processing
+
+This package is meant for reasonably small pieces of research and as
+such does not accommodate parallel or distributed processing. This may
+not be a problem if the distributed computing component is simply
+triggered from within a program at a fixed point and only the pre/post
+states are to be captured, i.e. so long as the data collection step is
+not shifted to a sub-thread, -process, or node. This would in any case
+not work as the state is tracked internally within the package.
+
+If different steps are to be executed in parallel it is necessary and
+sufficient that the boundary is indicated after all output generated in
+parallel (and thus all state-changing functions called in parallel) are
+consolidated and ordered deterministically. Whether this actually means
+sorting data, depends on the custom data collection used (if any). It
+may be needed if the PRNG state is conditional on parallelization method
+or order. As this should be avoided in any case -- it would not result
+in reproducible output in general -- it may not affect many users.
+
+A separate side effect worth noting is that a single program may not
+run in the same process. Depending on the execution environment, and in
+particular the use of notebooks, computational pipeline frameworks,
+etc., the state of a program including packages/modules may be moved
+from one process to another. This is not very common for the main
+script but if it does occur, the state of this package must be
+preserved and restored in between steps. This is not currently
+supported officially but the source code will provide some hints as to
+the necessary variables to track. In any case, it is for this rare use
+case that major environment information is tracked between states and
+changes be reported on.
+
+=== Alternatives
+
+As discussed above, the lock file only serves as a reference point, not
+a definition that allows for restoration of a particular state. The
+`checkpoint` package in R is one such alternative. A more general
+solution may be to manage the whole project as a package with a single
+main script and manage dependencies in the same way as the dependencies
+are managed anyway (R's `install.packages` or Python's `pip` among
+others). Virtual machines (VM) or containers are also alternatives
+though versioning requires more effort and it is uncertain if those
+artifacts can be used in the (distant) future if the underlying
+technologies prove insufficient and are removed, or become otherwise
+unavailable or unusable. https://github.com/stencila/dockta may help in
+this situation as well.
+
+A different and interesting approach is the one taken by the
+`reproducible` package authors (for R) combining a check-summing and
+caching mechanism. A more general solution is to build computational
+pipelines for both distributed computing, artifact and dependency
+management (see the `reprozip-jupyter` package for Python as an
+example). There are a large number of projects with varying feature
+sets. https://github.com/spotify/luigi[Luigi
+(https://github.com/spotify/luigi)] is one example for Python but many
+others exist and some support multiple languages and modelling
+environments. A smaller-scale solution to the pipeline problem is also
+available through the `represtools` and `workflowr` packages in R,
+`sacred` in Python, or https://github.com/systemslab/popper[popper
+(https://github.com/systemslab/popper)].
+
+If the code and its outputs are all that needs to be tracked, the
+well-known report generation tools such as R's `knitr` and Python's
+`reprep` or `knotr`, or notebook software such as
+http://jupyter.org/[Jupyter (http://jupyter.org/)] may be sufficient.
+
+== Further Information
+
+Reproducibility is a perhaps surprisingly difficult topic with many
+potential pitfalls. In addition to the relevant and sometimes
+discipline-specific literature, many of the vignettes and package
+documentation files of the packages mentioned above contain insightful
+discussions and valuable advice from other researchers and analysts.
+
+== Contributions
+
+The source code is available from https://github.com/varkappadev/rprdcbl
+where an issue tracker is also available. When reporting a bug in
+particular, please include any and all details needed to reproduce the
+problem.
+
+For more details on coding conventions, patch submissions and build
+infrastructure, please refer to the `CONTRIBUTING.md` file at the root
+of the project's source repository.
